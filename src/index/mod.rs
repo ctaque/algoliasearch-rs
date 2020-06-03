@@ -2,7 +2,7 @@ use std::{fmt, marker::PhantomData};
 
 use chrono::{DateTime, Utc};
 
-use reqwest::{header::HeaderMap, Client};
+use reqwest::{header::HeaderMap, Client, blocking::Client as BlockingClient};
 use serde::{
     de::{self, Deserialize, DeserializeOwned, Deserializer, Visitor},
     ser::{Serialize, Serializer},
@@ -533,6 +533,53 @@ impl<T: DeserializeOwned + Serialize> Index<T> {
             .await
             .map_err(|e| e.into())
     }
+
+    /// Search the index.
+    /// This method accepts a [&str](https://doc.rust-lang.org/std/str/index.html):
+    /// ```no_run
+    /// # #[macro_use] extern crate serde_derive;
+    /// # use algoliasearch::{Client, SearchQueryBuilder, Error};
+    /// # #[derive(Debug, Serialize, Deserialize)]
+    /// # struct User;
+    /// # fn main() -> Result<(), Error> {
+    /// # let index = Client::default().init_index::<User>("users");
+    /// let res = index.search("Bernardo")?;
+    /// dbg!(res.hits); // [User { name: "Bernardo", age: 32} ]
+    /// # Ok(())
+    /// # }
+    /// ```
+    /// Or a [SearchQuery](struct.SearchQuery.html) object, that can be build with the [SearchQueryBuilder](struct.SearchQueryBuilder.html):
+    /// ```no_run
+    /// # #[macro_use] extern crate serde_derive;
+    /// # use algoliasearch::{settings::TypoTolerance, Client, SearchQueryBuilder, Error};
+    /// # #[derive(Serialize, Deserialize)]
+    /// # struct User;
+    /// # async main() -> Result<(), Error> {
+    /// #   let index = Client::default().init_index::<User>("users");
+    /// let query = SearchQueryBuilder::default()
+    ///     .query("Bernardo".to_string())
+    ///     .analytics(false)
+    ///     .typo_tolerance(TypoTolerance::Strict)
+    ///     .page(1)
+    ///     .build()
+    ///     .unwrap();
+    /// let res = index.search(query)?;
+    /// #   Ok(())
+    /// # }
+    /// ```
+    pub fn search_blocking(&self, query: impl Into<SearchQuery>) -> Result<SearchResult<T>, Error> {
+        let query = query.into();
+        let uri = format!("{}/indexes/{}/query", self.base_url, self.index_name);
+        let params = serde_urlencoded::to_string(query).expect("failed to encode params");
+        let params = &SearchQueryBody { params };
+        BlockingClient::new()
+            .post(&uri)
+            .headers(self.get_headers())
+            .json(&params)
+            .send()?
+            .json::<SearchResult<T>>()
+            .map_err(|e| e.into())
+    }
     /// Get an object from the index.
     /// ```no_run
     /// # #[macro_use] extern crate serde_derive;
@@ -569,6 +616,40 @@ impl<T: DeserializeOwned + Serialize> Index<T> {
             .await
             .map_err(|e| e.into())
     }
+
+    /// Get an object from the index.
+    /// ```no_run
+    /// # #[macro_use] extern crate serde_derive;
+    /// # use algoliasearch::{Error, Client, SearchQueryBuilder};
+    /// # #[derive(Serialize, Deserialize, Debug)]
+    /// # struct User;
+    /// # fn main() -> Result<(), Box<Error>> {
+    /// #   let index = Client::default().init_index::<User>("users");
+    /// let object_1 = index.get_object(&"THE_ID", None)?;
+    /// dbg!(object_1); // User { name: "Bernardo", age: 32 };
+    /// #   Ok(())
+    /// # }
+    /// ```
+    pub fn get_object_blocking(
+        &self,
+        object_id: &str,
+        attributes_to_retrieve: Option<&[&str]>,
+    ) -> Result<T, Error> {
+        let uri = format!(
+            "{}/indexes/{}/{}",
+            self.base_url, self.index_name, object_id
+        );
+        BlockingClient::new()
+            .get(&uri)
+            .headers(self.get_headers())
+            .query(&[(
+                "attributes_to_retrieve",
+                attributes_to_retrieve.map(|el| el.join(",")),
+            )])
+            .send()?
+            .json()
+            .map_err(|e| e.into())
+    }
     /// Add an object to the index.
     /// ```no_run
     /// # #[macro_use] extern crate serde_derive;
@@ -595,6 +676,31 @@ impl<T: DeserializeOwned + Serialize> Index<T> {
             .await
             .map_err(|e| e.into())
     }
+
+    /// Add an object to the index.
+    /// ```no_run
+    /// # #[macro_use] extern crate serde_derive;
+    /// # use algoliasearch::{Error, Client, SearchQueryBuilder};
+    /// # #[derive(Serialize, Deserialize)]
+    /// # struct User { name: String, age: u32, };
+    /// # fn main() -> Result<(), Error> {
+    /// #   let index = Client::default().init_index::<User>("users");
+    /// let object_1 = User { name: "Bernardo".into(), age: 32 };
+    /// index.add_object(object_1)?;
+    /// #   Ok(())
+    /// # }
+    /// ```
+    pub fn add_object_blocking(&self, object: T) -> Result<AddObjectResult, Error> {
+        let uri = format!("{}/1/indexes/{}", self.base_url, self.index_name);
+        BlockingClient::new()
+            .post(&uri)
+            .headers(self.get_headers())
+            .json(&object)
+            .send()?
+            .json()
+            .map_err(|e| e.into())
+    }
+
     /// Add several objects to the index.
     /// ```no_run
     /// # #[macro_use] extern crate serde_derive;
@@ -630,6 +736,39 @@ impl<T: DeserializeOwned + Serialize> Index<T> {
             .await
             .map_err(|e| e.into())
     }
+
+    /// Add several objects to the index.
+    /// ```no_run
+    /// # #[macro_use] extern crate serde_derive;
+    /// # use algoliasearch::{Error, Client, SearchQueryBuilder};
+    /// # #[derive(Serialize, Deserialize)]
+    /// # struct User { name: String, age: u32, };
+    /// # fn main() -> Result<(), Error> {
+    /// #   let index = Client::default().init_index::<User>("users");
+    /// let object_1 = User { name: "Bernardo".into(), age: 32 };
+    /// let object_2 = User { name: "Esmeralda".into(), age: 45 };
+    /// index.add_objects(&[object_1, object_2])?;
+    /// #   Ok(())
+    /// # }
+    /// ```
+    pub fn add_objects_blocking(&self, objects: &[T]) -> Result<BatchedOperatioResult, Error> {
+        let uri = format!("{}/1/indexes/{}/batch", self.base_url, self.index_name);
+        let requests = objects.iter().fold(vec![], |mut acc, x| {
+            acc.push(BatchedOperationItem {
+                action: "addObject".to_string(),
+                body: x,
+            });
+            acc
+        });
+        let requests = BatchedOperation { requests };
+        BlockingClient::new()
+            .post(&uri)
+            .headers(self.get_headers())
+            .json(&requests)
+            .send()?
+            .json()
+            .map_err(|e| e.into())
+    }
     /// Add/update an object to the index. The object will be updated if you provide
     /// a `user_id` property, and added otherwise.
     /// ```no_run
@@ -657,6 +796,32 @@ impl<T: DeserializeOwned + Serialize> Index<T> {
             .await
             .map_err(|e| e.into())
     }
+
+    /// Add/update an object to the index in a blocking way (see update_object for async). The object will be updated if you provide
+    /// a `user_id` property, and added otherwise.
+    /// ```no_run
+    /// # #[macro_use] extern crate serde_derive;
+    /// # use algoliasearch::{Error, Client, SearchQueryBuilder};
+    /// # #[derive(Serialize, Deserialize)]
+    /// # struct User;
+    /// # fn main() -> Result<(), Result<UpdateOperationResult, Error> {
+    /// #   let index = Client::default().init_index::<User>("users");
+    /// #   let object_1 = User;
+    /// index.update_object_blocking(object_1);
+    /// #   Ok(())
+    /// # }
+    /// ```
+    pub fn update_object_blocking(&self, object: T) -> Result<UpdateOperationResult, Error> {
+        let uri = format!("{}/1/indexes/{}", self.base_url, self.index_name);
+        BlockingClient::new()
+            .put(&uri)
+            .headers(self.get_headers())
+            .json(&object)
+            .send()?
+            .json()
+            .map_err(|e| e.into())
+    }
+
     /// Add/update several objects to the index. The objects will be updated if you provide
     /// a `user_id` property, and added otherwise.
     /// ```no_run
@@ -693,6 +858,40 @@ impl<T: DeserializeOwned + Serialize> Index<T> {
             .await
             .map_err(|e| e.into())
     }
+
+    /// Add/update several objects to the index. The objects will be updated if you provide
+    /// a `user_id` property, and added otherwise.
+    /// ```no_run
+    /// # #[macro_use] extern crate serde_derive;
+    /// # use algoliasearch::{Error, Client, SearchQueryBuilder};
+    /// # #[derive(Serialize, Deserialize)]
+    /// # struct User;
+    /// # fn main() -> Result<(), Error> {
+    /// #   let index = Client::default().init_index::<User>("users");
+    /// #   let object_1 = User;
+    /// #   let object_2 = User;
+    /// index.update_objects(&[object_1, object_2])?;
+    /// #   Ok(())
+    /// # }
+    /// ```
+    pub fn update_objects_blocking(&self, objects: &[T]) -> Result<BatchedOperatioResult, Error> {
+        let uri = format!("{}/1/indexes/{}/batch", self.base_url, self.index_name);
+        let requests = objects.iter().fold(vec![], |mut acc, x| {
+            acc.push(BatchedOperationItem {
+                action: "updateObject".to_string(),
+                body: x,
+            });
+            acc
+        });
+        let requests = BatchedOperation { requests };
+        BlockingClient::new()
+            .post(&uri)
+            .headers(self.get_headers())
+            .json(&requests)
+            .send()?
+            .json()
+            .map_err(|e| e.into())
+    }
     /// Delete an object from the index.
     /// ```no_run
     /// # #[macro_use] extern crate serde_derive;
@@ -721,6 +920,31 @@ impl<T: DeserializeOwned + Serialize> Index<T> {
             .await
             .map_err(|e| e.into())
     }
+    /// Delete an object from the index.
+    /// ```no_run
+    /// # #[macro_use] extern crate serde_derive;
+    /// # use algoliasearch::{Error, Client, SearchQueryBuilder};
+    /// # #[derive(Serialize, Deserialize)]
+    /// # struct User { object_id: String, };
+    /// # fn main() -> Result<(), Error> {
+    /// #   let index = Client::default().init_index::<User>("users");
+    /// #   let object_1 = User { object_id: "test".into(), };
+    /// index.delete_object(&object_1.object_id)?;
+    /// #   Ok(())
+    /// # }
+    /// ```
+    pub fn delete_object_blocking(&self, object_id: &str) -> Result<DeleteObjectResult, Error> {
+        let uri = format!(
+            "{}/1/indexes/{}/{}",
+            self.base_url, self.index_name, object_id
+        );
+        BlockingClient::new()
+            .delete(&uri)
+            .headers(self.get_headers())
+            .send()?
+            .json()
+            .map_err(|e| e.into())
+    }
     /// Get the index's settings.
     /// ```no_run
     /// # #[macro_use] extern crate serde_derive;
@@ -744,6 +968,29 @@ impl<T: DeserializeOwned + Serialize> Index<T> {
             .await?
             .json()
             .await
+            .map_err(|e| e.into())
+    }
+
+    /// Get the index's settings.
+    /// ```no_run
+    /// # #[macro_use] extern crate serde_derive;
+    /// # use algoliasearch::{Error, Client, SearchQueryBuilder};
+    /// # #[derive(Serialize, Deserialize)]
+    /// # struct User;
+    /// # fn main() -> Result<(), Error> {
+    /// #   let index = Client::default().init_index::<User>("users");
+    /// let settings = index.get_settings()?;
+    /// dbg!(settings.hits_per_page); // 20
+    /// #   Ok(())
+    /// # }
+    /// ```
+    pub fn get_settings_blocking(&self) -> Result<settings::IndexSettings, Error> {
+        let uri = format!("{}/indexes/{}/settings", self.base_url, self.index_name);
+        BlockingClient::new()
+            .get(&uri)
+            .headers(self.get_headers())
+            .send()?
+            .json()
             .map_err(|e| e.into())
     }
     /// Set the index's settings.
@@ -785,6 +1032,45 @@ impl<T: DeserializeOwned + Serialize> Index<T> {
             .await?
             .json()
             .await
+            .map_err(|e| e.into())
+    }
+
+    /// Set the index's settings.
+    /// ```no_run
+    /// # #[macro_use] extern crate serde_derive;
+    /// # use futures::Future;
+    /// # use algoliasearch::{
+    /// #    Client, SearchQueryBuilder,
+    /// #    Error,
+    /// #    settings::{IndexSettingsBuilder, SortFacetValuesBy}
+    /// # };
+    /// # #[derive(Serialize, Deserialize)]
+    /// # struct User;
+    /// # fn main() -> Result<(), Error> {
+    /// #   let index = Client::default().init_index::<User>("users");
+    /// let settings = IndexSettingsBuilder::default()
+    ///     .hits_per_page(30)
+    ///     .sort_facet_values_by(SortFacetValuesBy::Count)
+    ///     .build()
+    ///     .unwrap();
+    /// index.set_settings(settings, None)?;
+    /// #   Ok(())
+    /// # }
+    /// ```
+    pub fn set_settings_blocking(
+        &self,
+        settings: settings::IndexSettings,
+        forward_to_replicas: Option<bool>,
+    ) -> Result<UpdateOperationResult, Error> {
+        let forward_to_replicas = forward_to_replicas.unwrap_or(false);
+        let uri = format!("{}/indexes/{}/settings", self.base_url, self.index_name);
+        BlockingClient::new()
+            .put(&uri)
+            .headers(self.get_headers())
+            .json(&settings)
+            .query(&[("forwardToReplicas", forward_to_replicas)])
+            .send()?
+            .json()
             .map_err(|e| e.into())
     }
     // Build authentication headers.
